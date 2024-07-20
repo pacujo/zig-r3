@@ -321,7 +321,7 @@ const MemoizedDate = struct {
 
 inline fn epoch_days_to_date(days_since_epoch: u20) Date {
     // The same date is likely to be used exclusively for 24 hours at
-    // the time. No point recalculating it every time.
+    // a time. No point recalculating it every time.
     if (MemoizedDate.get(days_since_epoch)) |date| {
         return date;
     }
