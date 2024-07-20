@@ -59,18 +59,49 @@ const EventList = std.SinglyLinkedList(Event);
 /// the associated event should produce log output.
 fn eventNodeEnabled(node: *EventList.Node) bool {
     const event = &node.data;
-    if (event.state == .unlinked) {
+    if (event.state == .disabled) {
+        // A fast path, which might give us a wrong `false` outcome.
+        // That's a risk worth taking.
+        return false;
+    }
+    // A slow path properly synchronized.
+    if (@cmpxchgStrong(
+        Event.State,
+        &event.state,
+        .unlinked,
+        .disabled,
+        .monotonic,
+        .monotonic,
+    )) |state| {
+        // The event was linked (or being linked).
+        return state == .enabled;
+    }
+    // The event was unlinked. We are responsible for adding the event
+    // to `trace_events`. In the interim, other callers will see it as
+    // disabled.
+    if (global_mutex.tryLock()) {
+        defer global_mutex.unlock();
         trace_events.prepend(node);
         var work_area: [1000]u8 = undefined;
         filterEvent(&work_area, event);
+        return event.state == .enabled;
     }
-    return event.state == .enabled;
+    // We didn't get the lock. We can't block as we might be in the
+    // middle of a signal handler, which could result in a deadlock.
+    // In case of contention, we simply restore the event to the
+    // unlinked state and treat it as disabled.
+    @atomicStore(Event.State, &event.state, .unlinked, .monotonic);
+    return false;
 }
 
 /// The list of "known" trace log events. Events get added to the list
 /// lazily as the program execution runs into `trace` (TRACE)
 /// statements.
 var trace_events = EventList{};
+
+/// Any access to trace_events or patterns must take place while
+/// holding `global_mutex`.
+var global_mutex: std.Thread.Mutex = .{};
 
 // Bitfields are used in libc's regex_t definition. Zig can't cope
 // with them yet so we resort to this hack, reserving a sufficiently
@@ -90,10 +121,10 @@ fn asRegex(pattern: *fake_regex_t) *re.regex_t {
 /// * Otherwise, if `.exclude`.? matches its name, the event is
 ///   disabled.
 /// * Otherwise, the event is enabled.
-var patterns = struct {
+var patterns: struct {
     include: ?fake_regex_t = null,
     exclude: ?fake_regex_t = null,
-};
+} = .{};
 
 pub const ReError = error{
     /// The given string splice is too large for the preallocated work
@@ -138,7 +169,10 @@ fn matchRegularExpression(
 }
 
 // Enable or disable an event based on the current selection rule.
+// Must be called while holding `global_mutex`.
 fn filterEvent(work_area: []u8, event: *Event) void {
+    var state: Event.State = .disabled;
+    defer @atomicStore(Event.State, &event.state, state, .monotonic);
     if (patterns.include) |*include| {
         if (matchRegularExpression(
             asRegex(include),
@@ -151,15 +185,13 @@ fn filterEvent(work_area: []u8, event: *Event) void {
                     work_area,
                     event.name,
                 ) catch return) {
-                    event.state = .disabled;
                     return;
                 }
             }
-            event.state = .enabled;
+            state = .enabled;
             return;
         }
     }
-    event.state = .disabled;
 }
 
 /// Specify the trace log event selection rule using two optional
@@ -167,7 +199,12 @@ fn filterEvent(work_area: []u8, event: *Event) void {
 /// do not match `exclude_regex` are enabled; others are disabled. If
 /// `include_regex` is null, all events are disabled. If
 /// `exclude_regex` is null, only `include_regex` is considered.
+///
+/// Do not call `select` from a signal handler as that could result in
+/// a deadlock.
 pub fn select(include_regex: ?[]const u8, exclude_regex: ?[]const u8) !void {
+    global_mutex.lock();
+    defer global_mutex.unlock();
     var work_area: [1000]u8 = undefined;
     if (patterns.include) |*include| {
         re.regfree(asRegex(include));
