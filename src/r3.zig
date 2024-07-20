@@ -609,11 +609,14 @@ pub fn str(chars: []const u8) Str {
     return Str{ .chars = chars };
 }
 
+/// An integer type returned by `newUID`.
+pub const UID = u32;
+
 /// A convenience function to generate (rather) unique object
 /// identifiers. It is customary to assign each object a UID and
 /// include it on every trace log event pertaining to the object. That
 /// helps target textual filtering to the generated log.
-pub fn newUID() u32 {
+pub fn newUID() UID {
     // A fixed-seed pseudorandom number generator can be beneficial
     // for the reproducibility of trace logs.
     const UIDGenerator = struct {
@@ -621,5 +624,5 @@ pub fn newUID() u32 {
         const rand = prng.random();
     };
 
-    return UIDGenerator.rand.int(u32);
+    return UIDGenerator.rand.int(UID);
 }
