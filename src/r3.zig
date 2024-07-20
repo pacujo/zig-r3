@@ -8,6 +8,7 @@
 //!
 //! Usage:
 //!
+//! ```
 //! const r3 = @import("r3");
 //! const TRACE = r3.trace;
 //! const TRACE_ENABLED = r3.enabled;
@@ -16,32 +17,33 @@
 //!     try r3.select("^MYAPP-", null);
 //! ...
 //!     TRACE("MYAPP-AWAIT-CONNECT UID={}", .{self.uid});
+//! ```
 //!
 //! Notes:
 //! * Using all-upper-case "TRACE" makes it easier for the eye to
 //!   separate trace events from the overall form of the source code.
-//! * While the use of "TRACE" is analogous to std.fmt.format, the
+//! * While the use of "TRACE" is analogous to `std.fmt.format`, the
 //!   intent is to stick to a rigorous output syntax for easier
 //!   postprocessing.
 //! * The first word of the format string (here:
 //!   "MYAPP-AWAIT-CONNECT") is the name of the event. Typically, each
 //!   event bears a unique name but that is not mandatory. The name is
-//!   used by "select" to enable and disable events.
+//!   used by `select` to enable and disable events.
 //! * The package depends on libc's regular expression API.
 
 const std = @import("std");
 const re = @cImport(@cInclude("regex.h"));
 
-// The "hidden" structure of a trace log event. Events get created at
-// comptime in a "dormant" state (linked = false). As the program
-// execution runs into TRACE statements, the corresponding events are
-// added to the global trace_events collection and linked is set to
-// true. At the same time, the name of the event is matched against
-// the current trace log selection and enabled is set accordingly.
-//
-// Conversely, whenever the event selection rule changes, all events
-// in the trace_events collection are traversed and their enabled
-// fields are updated.
+/// The "hidden" structure of a trace log event. Events get created at
+/// comptime in a "dormant" state (`.state` = `.unlinked`). As the program
+/// execution runs into TRACE statements, the corresponding events are
+/// added to the global trace_events collection and linked is set to
+/// true. At the same time, the name of the event is matched against
+/// the current trace log selection and enabled is set accordingly.
+///
+/// Conversely, whenever the event selection rule changes, all events
+/// in the trace_events collection are traversed and their enabled
+/// fields are updated.
 const Event = struct {
     const State = enum { unlinked, disabled, enabled };
 
@@ -52,6 +54,9 @@ const Event = struct {
 // Any dynamic collection type will do.
 const EventList = std.SinglyLinkedList(Event);
 
+/// Add the event node to `trace_events` and check it against the
+/// selection criterion if it hasn't yet been added. Return true iff
+/// the associated event should produce log output.
 fn eventNodeEnabled(node: *EventList.Node) bool {
     const event = &node.data;
     if (event.state == .unlinked) {
@@ -62,8 +67,9 @@ fn eventNodeEnabled(node: *EventList.Node) bool {
     return event.state == .enabled;
 }
 
-// The list of "known" trace log events. Events get added to the list
-// lazily as the program execution runs into TRACE statements.
+/// The list of "known" trace log events. Events get added to the list
+/// lazily as the program execution runs into `trace` (TRACE)
+/// statements.
 var trace_events = EventList{};
 
 // Bitfields are used in libc's regex_t definition. Zig can't cope
@@ -75,20 +81,26 @@ fn asRegex(pattern: *fake_regex_t) *re.regex_t {
     return @ptrCast(pattern);
 }
 
-// The trace event selection is based on a pair of optional regular
-// expressions. Each trace log event is enabled or disabled as follows:
-// * If include_pattern is null, the event is disabled.
-// * Otherwise, if include_pattern.? fails to match its name, the event
-//   is disabled.
-// * Otherwise, if exclude_pattern is null, the event is enabled.
-// * Otherwise, if exclude_pattern.? matches its name, the event is
-//   disabled.
-// * Otherwise, the event is enabled.
-var include_pattern: ?fake_regex_t = null;
-var exclude_pattern: ?fake_regex_t = null;
+/// The trace event selection is based on a pair of optional regular
+/// expressions. Each trace log event is enabled or disabled as follows:
+/// * If `.include` is null, the event is disabled.
+/// * Otherwise, if `.include`.? fails to match its name, the event is
+///   disabled.
+/// * Otherwise, if `.exclude` is null, the event is enabled.
+/// * Otherwise, if `.exclude`.? matches its name, the event is
+///   disabled.
+/// * Otherwise, the event is enabled.
+var patterns = struct {
+    include: ?fake_regex_t = null,
+    exclude: ?fake_regex_t = null,
+};
 
 pub const ReError = error{
+    /// The given string splice is too large for the preallocated work
+    /// area.
     Overflow,
+
+    /// There is a syntax error in the regular expression.
     BadRegex,
 };
 
@@ -127,13 +139,13 @@ fn matchRegularExpression(
 
 // Enable or disable an event based on the current selection rule.
 fn filterEvent(work_area: []u8, event: *Event) void {
-    if (include_pattern) |*include| {
+    if (patterns.include) |*include| {
         if (matchRegularExpression(
             asRegex(include),
             work_area,
             event.name,
         ) catch return) {
-            if (exclude_pattern) |*exclude| {
+            if (patterns.exclude) |*exclude| {
                 if (matchRegularExpression(
                     asRegex(exclude),
                     work_area,
@@ -151,40 +163,40 @@ fn filterEvent(work_area: []u8, event: *Event) void {
 }
 
 /// Specify the trace log event selection rule using two optional
-/// regular expressions. Events whose names match include_regex but do
-/// not match exclude_regex are enabled; others are disabled. If
-/// include_regex is null, all events are disabled. If exclude_regex
-/// is null, only include_regex is considered.
+/// regular expressions. Events whose names match `include_regex` but
+/// do not match `exclude_regex` are enabled; others are disabled. If
+/// `include_regex` is null, all events are disabled. If
+/// `exclude_regex` is null, only `include_regex` is considered.
 pub fn select(include_regex: ?[]const u8, exclude_regex: ?[]const u8) !void {
     var work_area: [1000]u8 = undefined;
-    if (include_pattern) |*include| {
+    if (patterns.include) |*include| {
         re.regfree(asRegex(include));
-        include_pattern = null;
+        patterns.include = null;
     }
-    if (exclude_pattern) |*exclude| {
+    if (patterns.exclude) |*exclude| {
         re.regfree(asRegex(exclude));
-        exclude_pattern = null;
+        patterns.exclude = null;
     }
     const dummy_fake_regex_t: fake_regex_t = undefined;
     if (include_regex) |regex| {
-        include_pattern = dummy_fake_regex_t;
+        patterns.include = dummy_fake_regex_t;
         compileRegularExpression(
-            asRegex(&include_pattern.?),
+            asRegex(&patterns.include.?),
             &work_area,
             regex,
         ) catch |err| {
-            include_pattern = null;
+            patterns.include = null;
             return err;
         };
     }
     if (exclude_regex) |regex| {
-        exclude_pattern = dummy_fake_regex_t;
+        patterns.exclude = dummy_fake_regex_t;
         compileRegularExpression(
-            asRegex(&exclude_pattern.?),
+            asRegex(&patterns.exclude.?),
             &work_area,
             regex,
         ) catch |err| {
-            exclude_pattern = null;
+            patterns.exclude = null;
             return err;
         };
     }
@@ -194,15 +206,17 @@ pub fn select(include_regex: ?[]const u8, exclude_regex: ?[]const u8) !void {
     }
 }
 
-/// Return true iff a trace log event is enabled. For visual reasons,
-/// the function is conventionally given the alias "TRACE_ENABLED".
-/// The function is used if evaluation the arguments to a "TRACE" call
-/// are elaborate and time-consuming, e.g.:
+/// Return true iff the named trace log event is enabled. For visual
+/// reasons, the function is conventionally given the alias
+/// "TRACE_ENABLED". The function is used if evaluation the arguments
+/// to a "TRACE" call are elaborate and time-consuming, e.g.:
 ///
+/// ```
 ///     if (TRACE_ENABLED("MYAPP-DB-SIZE")) {
 ///         const n = db_total_count(db);
 ///         TRACE("MYAPP-DB-SIZE COUNT={}", .{n});
 ///     }
+/// ```
 ///
 /// Simple references to variables, fields or array elements do not
 /// incur a performance penalty as the compiler can optimize them out
@@ -223,7 +237,9 @@ pub fn enabled(comptime event_name: []const u8) bool {
 /// the arguments permit a fully arbitrary log output, the intent is
 /// that a rigorous format should be used:
 ///
+/// ```
 ///    identifier { ' ' key '=' value }
+/// ```
 ///
 /// where
 /// * "identifier" and "key" should consist of capital letters, digits
@@ -231,7 +247,7 @@ pub fn enabled(comptime event_name: []const u8) bool {
 /// * "value" should contain only printable (7-bit) ASCII excluding
 ///   ' '.
 ///
-/// Format wrappers like "hex" and "str" help produce compliant output
+/// Format wrappers like `hex` and `str` help produce compliant output
 /// out of data blobs and strings.
 ///
 /// Each trace log line is ended with a newline so it should not be
@@ -397,7 +413,7 @@ const DateAndTime = struct {
     }
 };
 
-// Convert the epoch timestamp into a UTC date and time.
+/// Convert the epoch timestamp into a UTC date and time.
 fn microTimestampToDateAndTime(stamp_us: u60) DateAndTime {
     const us: u30 = @intCast(stamp_us % 1_000_000);
     const stamp_s: u17 = @intCast(stamp_us % 86_400_000_000 / 1_000_000);
@@ -418,15 +434,16 @@ fn microTimestampToDateAndTime(stamp_us: u60) DateAndTime {
 }
 
 /// A wrapper facility to produce ISO 8601 UTC timestamps at the
-/// beginning of each line. Two types are produced:
-/// * UTCTimeStamper
-/// * UTCTimeStamper.Engine
-///
-/// The former type acts as a small handle that can be copied around
-/// and passed by value. The latter type represents the time stamping
-/// engine itself. The caller must allocate, initialize and maintain
-/// the engine.
+/// beginning of each line.
 pub fn UTCTimeStamper(comptime UnderlyingWriter: type) type {
+    // Two types are produced:
+    // * `UTCTimeStamper`
+    // * `UTCTimeStamper.Engine`
+    //
+    // The former type acts as a small handle that can be copied
+    // around and passed by value. The latter type represents the
+    // time stamping engine itself. The caller must allocate,
+    // initialize and maintain the engine.
     return struct {
         engine: *Engine,
 
@@ -506,7 +523,9 @@ const Hex = struct {
 
 /// Produce a hexadecimal encoding of a byte string. Example:
 ///
+/// ```
 ///     TRACE("MYAPP-READ UID={} DATA={}", .{ self.uid, r3.hex(data[0..16]) });
+/// ```
 pub fn hex(byte_string: []const u8) Hex {
     return Hex{ .byte_string = byte_string };
 }
@@ -542,7 +561,9 @@ const Str = struct {
 
 /// Produce a printable encoding of an arbitrary character string. Example:
 ///
+/// ```
 ///     TRACE("MYAPP-READ UID={} DATA={}", .{ self.uid, r3.str(self.name) });
+/// ```
 ///
 /// A form of URL ("percent") encoding is used. The space (' ')
 /// character is encoded as a plus ('+') sign. The output is 7-bit
@@ -551,7 +572,7 @@ pub fn str(chars: []const u8) Str {
     return Str{ .chars = chars };
 }
 
-/// A convenience function to generate (relatively) unique object
+/// A convenience function to generate (rather) unique object
 /// identifiers. It is customary to assign each object a UID and
 /// include it on every trace log event pertaining to the object. That
 /// helps target textual filtering to the generated log.

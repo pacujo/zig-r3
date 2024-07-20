@@ -1,6 +1,12 @@
 .{
     .name = "r3",
     .version = "0.1.0",
+    .dependencies = .{
+        .r3 = .{
+            .url = "/home/marko/github/zig-r3",
+            .hash = "12208d37b20b558b058e641b3ab18f4398b7e7af5afba1eb5490cee58b8a21ef2fc2",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
