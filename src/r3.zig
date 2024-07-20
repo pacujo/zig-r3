@@ -278,14 +278,14 @@ const year_day_dates: [366]RelativeDate = init: {
     var year_day: i10 = 0; // March 1
     while (year_day < 366) : (year_day += 1) {
         if (year_day == month_break[at_month]) {
-            month = month % 12 + 1;
+            month += 1;
             offset_days = year_day - 1;
             at_month += 1;
         }
         dates[year_day] = .{
-            .month = month,
-            .day = @intCast(year_day - offset_days),
-            .year_offset = if (month < 3) 1 else 0,
+            .month = (month - 1) % 12 + 1,
+            .day = year_day - offset_days,
+            .year_offset = month / 13,
         };
     }
     break :init dates;
