@@ -609,6 +609,30 @@ pub fn str(chars: []const u8) Str {
     return Str{ .chars = chars };
 }
 
+const Ptr = struct {
+    obj: *const anyopaque,
+
+    pub fn format(
+        self: Ptr,
+        _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try writer.print("{x}", .{@intFromPtr(self.obj)});
+    }
+};
+
+/// Produce a printable encoding of an arbitrary pointer. Example:
+///
+/// ```
+///     TRACE("MYAPP-READ UID={} PTR={}", .{ self.uid, r3.ptr(self) });
+/// ```
+///
+/// A hexadecimal memory address is produced.
+pub fn ptr(object: *const anyopaque) Ptr {
+    return Ptr{ .obj = object };
+}
+
 /// An integer type returned by `newUID`.
 pub const UID = u32;
 
